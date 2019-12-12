@@ -29,6 +29,18 @@ with fo as (
 		AND (json_extract_scalar(fo.snapshot_detail, '$.deliveryOption') = '0'
 		OR json_extract_scalar(fo.snapshot_detail, '$.deliveryOption') is null)
 		{{#endif}}
+        {{#if final_state == 'completed_only'}} --1st addition
+        and fo.order_state = 11 
+        {{#endif}}
+        {{#if final_state == 'exclude_completed_orders'}} --2nd addition
+        and fo.order_state <> 11 
+        {{#endif}}
+        {{#if qsr_pos_integrated_only == 'yes'}} --3rd addition
+        and json_extract_scalar(snapshot_detail, '$.cartWithQuote.merchantCartWithQuoteList[0].merchantInfoObj.qsrCode') is not null
+        {{#endif}}
+        {{#if qsr_pos_integrated_only == 'no'}} --3rd addition
+        and json_extract_scalar(snapshot_detail, '$.cartWithQuote.merchantCartWithQuoteList[0].merchantInfoObj.qsrCode') is null
+        {{#endif}}
 )
 , mex_funded_fo as (
     select
@@ -112,8 +124,8 @@ SELECT
       ,CASE WHEN coalesce(fo.pre_accepted_time,fo.ord_order_in_prepare_time) IS NOT NULL THEN 'mex_auto_accept' ELSE NULL END AS mex_accept
       ,case when fo.metadata <> '' then
         case when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or aa.auto_accept_order is not null then 'auto-accept' end
-      when coalesce(fo.pre_accepted_time,fo.ord_order_in_prepare_time) IS NOT NULL then 'manual-accept'
-        else null end as mex_auto_accept
+            when coalesce(fo.pre_accepted_time,fo.ord_order_in_prepare_time) IS NOT NULL then 'manual-accept'
+            else null end as mex_auto_accept
     --   ,case when aa.auto_accept_order is not null then 'mex_auto_accept' else null end as mex_auto_accept_status
       ,fo.cancel_msg
       --,logs.op_cancel_reason
@@ -197,7 +209,7 @@ SELECT
     left join food_data_service.merchants as mex on mex.merchant_id = fo.merchant_id
     left join food_data_service.merchant_contracts as mex_con on mex_con.merchant_id = mex.merchant_id
     left join xtramile.mlm_bank_details on mlm_bank_details.store_grab_id = mex_con.grabpay_grabid
-	  left join xtramile.mlm_banks on mlm_banks.id = mlm_bank_details.bank_name_id
+	left join xtramile.mlm_banks on mlm_banks.id = mlm_bank_details.bank_name_id
     left join public.drivers on fo.merchant_id = drivers.identification_card_number
     left join paysi.bank_detail det on drivers.id = det.user_id
     left join paysi.bank bank on det.bank_id = bank.id

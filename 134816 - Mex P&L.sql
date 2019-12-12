@@ -2,7 +2,7 @@ with mex_datamart as (
     select
         mex.*
     from datamart.dim_merchants mex
-    where [[merchant_id in ({{merchant_id}})]]
+    where ([[merchant_id in ({{merchant_id}})]] or [[business_name in ({{merchant_id}})]])
         and [[city_id in ({{cities|noquote}})]]
         and [[country_id in ({{country_|noquote}})]]
 )
@@ -220,7 +220,7 @@ with mex_datamart as (
     FROM orders
     GROUP BY 1,2,3,4
 )
-,mf_promo_code_per_outlet as (
+/*,mf_promo_code_per_outlet as (
     select * from (
         select
             biz_outlet.business_name,
@@ -241,7 +241,7 @@ with mex_datamart as (
             and [[mf_promo_code.date_local <= date({{end_date}})]]
         group by 1,2,3,4
     )
-)
+)*/
 ,batching as (
     select
         date_local, restaurant_id, city_name
@@ -370,7 +370,7 @@ with mex_datamart as (
         ,city
         ,sum(mex_mfp_spend_usd) as mex_mfp_spend_usd
         ,sum(mex_mfp_spend_local) as mex_mfp_spend_local
-    from slide.gf_mfp_merchant_daily
+    from slide.gf_mfp_merchant_daily_v2
     where [[(partition_date_local) >= (date({{start_date}}) - interval '1' day)]]
         and [[(partition_date_local) <= (date({{end_date}}) + interval '1' day)]]
         and [[merchant_id in ({{merchant_id}})]]
@@ -394,6 +394,7 @@ with mex_datamart as (
     ,orders.partner_status
     ,orders.bd_account_status
     ,orders.bd_partner_status
+    ,orders.business_model
     ,case when am_name is not null then 'AM' else 'Non-AM' end as am_tagging
 
     ,orders.all_incoming_orders
@@ -483,24 +484,30 @@ with mex_datamart as (
     ,coalesce(mfc.partner_grab_promo_spend_n_local_non_mfc,0) as partner_grab_promo_spend_n_local_non_mfc
 
     -- MFP
-    ,case
-        when orders.date_local < date('2019-07-01') then COALESCE(mf_promo_code_perday_outlet_usd,0)
-        else coalesce(mfp.mex_mfp_spend_usd, 0) end
-    AS mf_promo_code_perday_outlet_usd
+    ,--case
+      --  when orders.date_local < date('2019-07-01') then COALESCE(mf_promo_code_perday_outlet_usd,0)
+      --  else
+        coalesce(mfp.mex_mfp_spend_usd, 0)
+    --end AS
+    mf_promo_code_perday_outlet_usd
 
-    ,case
-    	when orders.date_local < date('2019-07-01') then COALESCE(mf_promo_code_perday_outlet_local,0)
-    	else coalesce(mfp.mex_mfp_spend_local, 0) end
-	AS mf_promo_code_perday_outlet_local
+    ,--case
+    	--when orders.date_local < date('2019-07-01') then COALESCE(mf_promo_code_perday_outlet_local,0) else
+    	coalesce(mfp.mex_mfp_spend_local, 0)
+	--end AS mf_promo_code_perday_outlet_local
 
     /* batching related metrics*/
     ,COALESCE(batching.tried_batching, 0) as tried_batching
     ,COALESCE(batching.batched_orders, 0) as batched_orders
 
   /* mbp related metrics*/
-    ,COALESCE(mbp.mbp_paid_by_mex,0) as mbp_paid_by_mex
-    ,COALESCE(mbp.mbp_paid_by_pax,0) as mbp_paid_by_pax
-    ,COALESCE(mbp.tsp_paid_by_us,0) as tsp_paid_by_us
+    ,COALESCE(mbp.mbp_paid_by_mex/rer.exchange_one_usd,0) as mbp_paid_by_mex
+    ,COALESCE(mbp.mbp_paid_by_pax/rer.exchange_one_usd,0) as mbp_paid_by_pax
+    ,COALESCE(mbp.tsp_paid_by_us/rer.exchange_one_usd,0) as tsp_paid_by_us
+
+    /* overstated amount*/
+    ,coalesce(overstatement.overstated_amount_usd, 0) as overstated_amount_usd
+    -- ,coalesce(overstatement.overstated_amount_local, 0) as overstated_amount_local
 
     /*comms related*/
     --,COALESCE(case when orders.business_model = 'Integrated' then 100 else comms.blended_collection_rate end,0) as blended_collection_rate
@@ -515,11 +522,11 @@ with mex_datamart as (
     and orders.city_name = mfc.city
     and date(orders.date_local) = date(mfc.date_local)
 
-  LEFT JOIN mf_promo_code_per_outlet
+  /*LEFT JOIN mf_promo_code_per_outlet
     ON lower(trim(orders.business_name)) = lower(trim(mf_promo_code_per_outlet.business_name))
     AND orders.country_name = mf_promo_code_per_outlet.country_name
     AND orders.city_name = mf_promo_code_per_outlet.city_name
-    AND orders.date_local = date(mf_promo_code_per_outlet.date_local)
+    AND orders.date_local = date(mf_promo_code_per_outlet.date_local)*/
 
   LEFT JOIN mfp
     on mfp.merchant_id = orders.merchant_id
@@ -546,21 +553,37 @@ with mex_datamart as (
 
   LEFT JOIN public.countries on orders.country_name = countries.name
 
+  LEFT JOIN slide.gf_dash_mex_promo_overstated overstatement
+    on orders.merchant_id = overstatement.merchant_id
+    and orders.country_name = overstatement.country_name
+    and orders.city_name = overstatement.city_name
+    and orders.date_local = date(overstatement.date_local)
+
   LEFT JOIN datamart.ref_exchange_rates rer on countries.id = rer.country_id and (orders.date_local between rer.start_date and rer.end_date)
 )
 select
-    business_name as merchant_business_name
-    ,business_name as merchant_id_business_name
-    ,business_name as business_name
-    ,'By Brand' as aggregation_level
+    {{#if dimension_split == 'merchant'}}
+         merchant_name as merchant_business_name
+        ,merchant_id as merchant_id_business_name
+        ,business_name as business_name
+        ,'By Merchant' as business_merchant_aggregation
+    {{#else}}
+        business_name as merchant_business_name
+        ,business_name as merchant_id_business_name
+        ,business_name as business_name
+        ,'By Brand' as business_merchant_aggregation
+    {{#endif}}
+
+    ,'Total' as time_aggregation
     ,country_name
     ,city_name
-    ,partner_status --might have different status within the same brand, how to resolve this
+    ,partner_status
     ,bd_account_status
     ,bd_partner_status
+    ,business_model
     ,am_tagging
-    ,min(date_local) as start_date
-    ,max(date_local) as end_date
+    ,[[date({{start_date}})]] as start_date
+    ,[[date({{end_date}})]] as end_date
 
     ,sum(total_cancellations) as total_cancellations
 
@@ -585,101 +608,44 @@ select
     ,sum(mex_promo_spend_n_usd) as mfc_mex_promo_spend_usd
     ,sum(mf_promo_code_perday_outlet_usd) as mfp_mex_promo_spend_usd
     ,sum(mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd) as total_mfd_usd
-    ,sum(promo_expense_usd + mex_promo_spend_n_usd + grab_promo_spend_n_usd) as promo_expense_usd
-    ,cast(sum(mex_commission_usd + driver_commission_usd - (incentives_usd + spot_incentive_bonus_usd + dax_delivery_fare_usd-delivery_fare_usd)) as double) / sum(gmv_usd) as ppgmv
+    ,sum(promo_expense_usd + mex_promo_spend_n_usd + grab_promo_spend_n_usd - overstated_amount_usd) as promo_expense_usd
+    ,cast(sum(mex_commission_usd + driver_commission_usd - (incentives_usd + spot_incentive_bonus_usd + dax_delivery_fare_usd - delivery_fare_usd) - (promo_expense_usd + mex_promo_spend_n_usd + grab_promo_spend_n_usd - overstated_amount_usd) + (mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd)) as double) / sum(gmv_usd) as ppgmv
 
+    ,avg(fx_one_usd) as avg_fx_one_usd
 
-    --USD metrics
-
-    --Partner specific metric, usd
-
-    /*,sum(total_partner_gmv_usd) as total_partner_gmv_usd
-    ,sum(total_partner_basket_size_usd) as total_partner_basket_size_usd
-    ,sum(total_partner_mex_commission_usd) as total_partner_mex_commission_usd
-    ,sum(total_partner_delivery_fare_usd) as total_partner_delivery_fare_usd
-    ,sum(total_partner_dax_delivery_fare_usd) as total_partner_dax_delivery_fare_usd
-    ,sum(total_partner_driver_commission_usd) as total_partner_driver_commission_usd
-    ,sum(total_partner_incentives_usd) as total_partner_incentives_usd
-    ,sum(total_partner_spot_incentive_bonus_usd) as total_partner_spot_incentive_bonus_usd
-    ,sum(total_partner_promo_expense_usd) as total_partner_promo_expense_usd
-
-    --Local currency metrics
-    ,sum(gmv_local) as gmv_local
-    ,sum(basket_size_local) as basket_size_local
-    ,sum(sub_total_local) as sub_total_local
-    ,sum(mex_commission_local) as mex_commission_local
-    ,sum(delivery_fare_local) as delivery_fare_local
-    ,sum(dax_delivery_fare_local) as dax_delivery_fare_local
-    ,sum(driver_commission_local) as driver_commission_local
-    ,sum(incentives_local) as incentives_local
-    ,sum(spot_incentive_bonus_local) as spot_incentive_bonus_local
-    ,sum(promo_expense_local) as promo_expense_local
-
-    ,sum(total_partner_gmv_local) as total_partner_gmv_local
-    ,sum(total_partner_basket_size_local) as total_partner_basket_size_local
-    ,sum(total_partner_sub_total_local) as total_partner_sub_total_local
-    ,sum(total_partner_mex_commission_local) as total_partner_mex_commission_local
-    ,sum(total_partner_delivery_fare_local) as total_partner_delivery_fare_local
-    ,sum(total_partner_dax_delivery_fare_local) as total_partner_dax_delivery_fare_local
-    ,sum(total_partner_driver_commission_local_usd) as total_partner_driver_commission_local_usd
-    ,sum(total_partner_incentives_local) as total_partner_incentives_local
-    ,sum(total_partner_spot_incentive_bonus_local) as total_partner_spot_incentive_bonus_local
-    ,sum(total_partner_promo_expense_local) as total_partner_promo_expense_local
-
-    --Partner specific metric, local
-    ,sum(total_partner_all_incoming_orders) as total_partner_all_incoming_orders
-    ,sum(total_partner_completed_orders) as total_partner_completed_orders
-    ,sum(total_partner_allocated_orders) as total_partner_allocated_orders
-    ,sum(total_partner_unallocated_orders) as total_partner_unallocated_orders
-    ,sum(total_partner_completed_orders_gf_item) as total_partner_completed_orders_gf_item
-
-    --MFC
-    ,sum(grab_promo_spend_n_usd) as grab_promo_spend_n_usd
-    ,sum(mex_promo_spend_n_usd_non_mfc) as mex_promo_spend_n_usd_non_mfc
-    ,sum(grab_promo_spend_n_usd_non_mfc) as grab_promo_spend_n_usd_non_mfc
-    ,sum(partner_mex_promo_spend_n_usd) as partner_mex_promo_spend_n_usd
-    ,sum(partner_grab_promo_spend_n_usd) as partner_grab_promo_spend_n_usd
-    ,sum(partner_mex_promo_spend_n_usd_non_mfc) as partner_mex_promo_spend_n_usd_non_mfc
-    ,sum(partner_grab_promo_spend_n_usd_non_mfc) as partner_grab_promo_spend_n_usd_non_mfc
-
-    ,sum(mex_promo_spend_n_local) as mex_promo_spend_n_local
-    ,sum(grab_promo_spend_n_local) as grab_promo_spend_n_local
-    ,sum(mex_promo_spend_n_local_non_mfc) as mex_promo_spend_n_local_non_mfc
-    ,sum(grab_promo_spend_n_local_non_mfc) as grab_promo_spend_n_local_non_mfc
-    ,sum(partner_mex_promo_spend_n_local) as partner_mex_promo_spend_n_local
-    ,sum(partner_grab_promo_spend_n_local) as partner_grab_promo_spend_n_local
-    ,sum(partner_mex_promo_spend_n_local_non_mfc) as partner_mex_promo_spend_n_local_non_mfc
-    ,sum(partner_grab_promo_spend_n_local_non_mfc) as partner_grab_promo_spend_n_local_non_mfc
-
-    --MFP
-    ,sum(mf_promo_code_perday_outlet_local) as mf_promo_code_perday_outlet_local
-
-    --batching metrics
-    ,sum(tried_batching) as tried_batching
-    ,sum(batched_orders) as batched_orders
-
-    ,sum(mbp_paid_by_mex) as mbp_paid_by_mex
-    ,sum(mbp_paid_by_pax) as mbp_paid_by_pax
-    ,sum(tsp_paid_by_us) as tsp_paid_by_us
-    */
 from final_table
-group by 1,2,3,4,5,6,7,8,9,10
-/*
-{{#if merchant_view =='yes'}}
+group by 1,2,3,4,5,6,7,8,9,10,11,12
+{{#if breakdown_by_month == 'yes'}}
 union all (
-  select
-    merchant_name as merchant_business_name
-    ,merchant_id as merchant_id_business_name
-    ,business_name as business_name
-    ,'By Merchant'
+    select
+    {{#if dimension_split == 'merchant'}}
+         merchant_name as merchant_business_name
+        ,merchant_id as merchant_id_business_name
+        ,business_name as business_name
+        ,'By Merchant' as business_merchant_aggregation
+    {{#else}}
+        business_name as merchant_business_name
+        ,business_name as merchant_id_business_name
+        ,business_name as business_name
+        ,'By Brand' as business_merchant_aggregation
+    {{#endif}}
+
+    ,'By Month' as time_aggregation
     ,country_name
     ,city_name
-    ,partner_status --might have different status within the same brand, how to resolve this
+    ,partner_status
     ,bd_account_status
     ,bd_partner_status
+    ,business_model
     ,am_tagging
-    ,min(date_local) as start_date
-    ,max(date_local) as end_date
+    ,case when date_trunc('month',date(date_local)) <= date({{start_date}})
+            then date({{start_date}})
+            else date_trunc('month',date(date_local))
+            end as start_date
+    ,case when (date_trunc('month', date(date_local)) + interval '1' month - interval '1' day) <= date({{end_date}})
+        then (date_trunc('month', date(date_local)) + interval '1' month - interval '1' day)
+        else date({{end_date}})
+        end as end_date
 
     ,sum(total_cancellations) as total_cancellations
 
@@ -704,10 +670,134 @@ union all (
     ,sum(mex_promo_spend_n_usd) as mfc_mex_promo_spend_usd
     ,sum(mf_promo_code_perday_outlet_usd) as mfp_mex_promo_spend_usd
     ,sum(mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd) as total_mfd_usd
-    ,sum(promo_expense_usd + mex_promo_spend_n_usd + grab_promo_spend_n_usd) as promo_expense_usd
-    ,cast(sum(mex_commission_usd + driver_commission_usd - (incentives_usd + spot_incentive_bonus_usd + dax_delivery_fare_usd-delivery_fare_usd)) as double) / sum(gmv_usd) as ppgmv
+    ,sum(promo_expense_usd + mex_promo_spend_n_usd + grab_promo_spend_n_usd - overstated_amount_usd) as promo_expense_usd
+    ,cast(sum(mex_commission_usd + driver_commission_usd - (incentives_usd + spot_incentive_bonus_usd + dax_delivery_fare_usd - delivery_fare_usd) - (promo_expense_usd + mex_promo_spend_n_usd + grab_promo_spend_n_usd - overstated_amount_usd) + (mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd)) as double) / sum(gmv_usd) as ppgmv
 
-  from final_table
-  group by 1,2,3,4,5,6,7,8,9,10
+    ,avg(fx_one_usd) as avg_fx_one_usd
+
+    from final_table
+    group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14
+)
+{{#endif}}
+{{#if breakdown_by_week == 'yes'}}
+union all (
+    select
+    {{#if dimension_split == 'merchant'}}
+         merchant_name as merchant_business_name
+        ,merchant_id as merchant_id_business_name
+        ,business_name as business_name
+        ,'By Merchant' as business_merchant_aggregation
+    {{#else}}
+        business_name as merchant_business_name
+        ,business_name as merchant_id_business_name
+        ,business_name as business_name
+        ,'By Brand' as business_merchant_aggregation
+    {{#endif}}
+
+    ,'By Week' as time_aggregation
+    ,country_name
+    ,city_name
+    ,partner_status --might have different status within the same brand, how to resolve this
+    ,bd_account_status
+    ,bd_partner_status
+    ,business_model
+    ,am_tagging
+    ,case when date_trunc('week',date(date_local)) <= date({{start_date}})
+            then date({{start_date}})
+            else date_trunc('week',date(date_local))
+            end as start_date
+    ,case when (date_trunc('week', date(date_local)) + interval '6' day) <= date({{end_date}})
+        then (date_trunc('week', date(date_local)) + interval '6' day)
+        else date({{end_date}})
+        end as end_date
+
+    ,sum(total_cancellations) as total_cancellations
+
+    --main metrics
+    ,sum(gmv_usd) as gmv_usd
+    ,sum(gmv_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as adj_gmv_usd
+    ,sum(basket_size_usd) as basket_size_usd
+    ,sum(basket_size_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as adj_basket_size_usd
+    ,sum(sub_total_usd) as sub_total_usd
+    ,sum(total_partner_sub_total_usd) as total_partner_sub_total_usd
+    ,sum(all_incoming_orders) as all_incoming_orders
+    ,sum(completed_orders) as completed_orders
+    ,sum(delivery_fare_usd) as delivery_fare_usd
+    ,sum(dax_delivery_fare_usd) as dax_delivery_fare_usd
+    ,sum(mex_commission_usd) as mex_commission_usd
+    ,sum(driver_commission_usd) as driver_commission_usd
+    ,sum(mex_commission_usd + driver_commission_usd) as total_gross_revenue_usd
+    ,sum(incentives_usd) as incentives_usd
+    ,sum(spot_incentive_bonus_usd) as spot_incentive_bonus_usd
+    ,sum(dax_delivery_fare_usd-delivery_fare_usd+incentives_usd+spot_incentive_bonus_usd) as total_incentives_spend_usd
+    ,sum(dax_delivery_fare_usd-delivery_fare_usd+incentives_usd+spot_incentive_bonus_usd - mbp_paid_by_mex) as total_incentives_spend_usd_excl_mbp
+    ,sum(mex_promo_spend_n_usd) as mfc_mex_promo_spend_usd
+    ,sum(mf_promo_code_perday_outlet_usd) as mfp_mex_promo_spend_usd
+    ,sum(mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd) as total_mfd_usd
+    ,sum(promo_expense_usd + mex_promo_spend_n_usd + grab_promo_spend_n_usd - overstated_amount_usd) as promo_expense_usd
+    ,cast(sum(mex_commission_usd + driver_commission_usd - (incentives_usd + spot_incentive_bonus_usd + dax_delivery_fare_usd - delivery_fare_usd) - (promo_expense_usd + mex_promo_spend_n_usd + grab_promo_spend_n_usd - overstated_amount_usd) + (mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd)) as double) / sum(gmv_usd) as ppgmv
+
+    ,avg(fx_one_usd) as avg_fx_one_usd
+
+    from final_table
+    group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14
+)
+{{#endif}}
+{{#if breakdown_by_day == 'yes'}}
+union all (
+    select
+    {{#if dimension_split == 'merchant'}}
+         merchant_name as merchant_business_name
+        ,merchant_id as merchant_id_business_name
+        ,business_name as business_name
+        ,'By Merchant' as business_merchant_aggregation
+    {{#else}}
+        business_name as merchant_business_name
+        ,business_name as merchant_id_business_name
+        ,business_name as business_name
+        ,'By Brand' as business_merchant_aggregation
+    {{#endif}}
+
+    ,'By Day' as time_aggregation
+    ,country_name
+    ,city_name
+    ,partner_status --might have different status within the same brand, how to resolve this
+    ,bd_account_status
+    ,bd_partner_status
+    ,business_model
+    ,am_tagging
+    ,date(date_local) as start_date
+    ,date(date_local) as end_date
+
+    ,sum(total_cancellations) as total_cancellations
+
+    --main metrics
+    ,sum(gmv_usd) as gmv_usd
+    ,sum(gmv_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as adj_gmv_usd
+    ,sum(basket_size_usd) as basket_size_usd
+    ,sum(basket_size_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as adj_basket_size_usd
+    ,sum(sub_total_usd) as sub_total_usd
+    ,sum(total_partner_sub_total_usd) as total_partner_sub_total_usd
+    ,sum(all_incoming_orders) as all_incoming_orders
+    ,sum(completed_orders) as completed_orders
+    ,sum(delivery_fare_usd) as delivery_fare_usd
+    ,sum(dax_delivery_fare_usd) as dax_delivery_fare_usd
+    ,sum(mex_commission_usd) as mex_commission_usd
+    ,sum(driver_commission_usd) as driver_commission_usd
+    ,sum(mex_commission_usd + driver_commission_usd) as total_gross_revenue_usd
+    ,sum(incentives_usd) as incentives_usd
+    ,sum(spot_incentive_bonus_usd) as spot_incentive_bonus_usd
+    ,sum(dax_delivery_fare_usd-delivery_fare_usd+incentives_usd+spot_incentive_bonus_usd) as total_incentives_spend_usd
+    ,sum(dax_delivery_fare_usd-delivery_fare_usd+incentives_usd+spot_incentive_bonus_usd - mbp_paid_by_mex) as total_incentives_spend_usd_excl_mbp
+    ,sum(mex_promo_spend_n_usd) as mfc_mex_promo_spend_usd
+    ,sum(mf_promo_code_perday_outlet_usd) as mfp_mex_promo_spend_usd
+    ,sum(mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd) as total_mfd_usd
+    ,sum(promo_expense_usd + mex_promo_spend_n_usd + grab_promo_spend_n_usd - overstated_amount_usd) as promo_expense_usd
+    ,cast(sum(mex_commission_usd + driver_commission_usd - (incentives_usd + spot_incentive_bonus_usd + dax_delivery_fare_usd - delivery_fare_usd) - (promo_expense_usd + mex_promo_spend_n_usd + grab_promo_spend_n_usd - overstated_amount_usd) + (mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd)) as double) / sum(gmv_usd) as ppgmv
+
+    ,avg(fx_one_usd) as avg_fx_one_usd
+
+    from final_table
+    group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14
 )
 {{#endif}}

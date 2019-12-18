@@ -30,10 +30,13 @@ with fo as (
 		OR json_extract_scalar(fo.snapshot_detail, '$.deliveryOption') is null)
 		{{#endif}}
         {{#if final_state == 'completed_only'}} --1st addition
-        and fo.order_state = 11 
+        and fo.order_state = 11
         {{#endif}}
         {{#if final_state == 'exclude_completed_orders'}} --2nd addition
-        and fo.order_state <> 11 
+        and fo.order_state <> 11
+        {{#endif}}
+        {{#if qsr_pos_integrated_only == 'no'}}
+        and json_extract_scalar(snapshot_detail, '$.cartWithQuote.merchantCartWithQuoteList[0].merchantInfoObj.qsrCode') is null
         {{#endif}}
         {{#if qsr_pos_integrated_only == 'yes'}} --3rd addition
         and json_extract_scalar(snapshot_detail, '$.cartWithQuote.merchantCartWithQuoteList[0].merchantInfoObj.qsrCode') is not null
@@ -50,6 +53,7 @@ with fo as (
     CROSS JOIN UNNEST(CAST(array_discount AS array(json))) AS a(discount)
     group by 1
 )
+SELECT * FROM (
 SELECT
      cities.name as city_name
 	  ,cities.country_code as country_name
@@ -141,14 +145,14 @@ SELECT
       ,case when json_extract_scalar(fo.metadata, '$.payMerchant') is not null then 1 else 0 end as qsr_pay_merchant
 
        ,case when fo.metadata <> '' then
-        case when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or aa.auto_accept_order is not null then 'mex-auto-accept' end
+        case when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or aa.auto_accept_order is not null then 'mex_auto_accept' end
         else null end as my_mex_auto_accept
     ,case when fo.metadata <> '' then
         case
-            when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or aa.auto_accept_order is not null then 'mex-accept'
-            when coalesce(fo.pre_accepted_time,fo.ord_order_in_prepare_time) IS NOT NULL then 'mex-accept'
+            when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or aa.auto_accept_order is not null then 'mex_accept'
+            when coalesce(fo.pre_accepted_time,fo.ord_order_in_prepare_time) IS NOT NULL then 'mex_accept'
             end
-        when coalesce(fo.pre_accepted_time,fo.ord_order_in_prepare_time) IS NOT NULL then 'mex-accept'
+        when coalesce(fo.pre_accepted_time,fo.ord_order_in_prepare_time) IS NOT NULL then 'mex_accept'
         else NULL end as my_mex_accept_column
 
 
@@ -234,3 +238,10 @@ SELECT
 
     and [[date(bb.date_local) >= date({{order_create_start_date}})]]
     and [[date(bb.date_local) <= date({{order_create_end_date}})]]
+)
+{{#if auto_accept_order == 'yes'}}
+where my_mex_auto_accept = 'mex_auto_accept'
+{{#endif}}
+{{#if auto_accept_order == 'no'}}
+where my_mex_auto_accept is null
+{{#endif}}

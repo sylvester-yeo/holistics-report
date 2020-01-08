@@ -246,16 +246,16 @@ with mex_datamart as (
 )*/
 ,batching as (
     select
-        date_local, restaurant_id, city_name
+        date_local, merchant_id, city as city_name
         ,sum(case when tried_batching = 'true' then 1 else 0 end) as tried_batching
-        ,sum(case when batch_id is not null then 1 else 0 end) as batched_orders
-    from slide.gf_order_batching_add_metrics
+        ,sum(is_batched_order) as batched_orders
+    from slide.food_order_batching_dashboard_order_lvl
     where [[(partition_date) >= date_format(date({{start_date}}) - interval '1' day,'%Y-%m-%d')]]
         and [[(partition_date) <= date_format(date({{end_date}}) + interval '1' day,'%Y-%m-%d')]]
         and [[date(date_local) >= date({{start_date}})]]
         and [[date(date_local) <= date({{end_date}})]]
-        and [[restaurant_id in ({{merchant_id}})]]
-        and booking_state = 'COMPLETED'
+        and [[merchant_id in ({{merchant_id}})]]
+        and order_state = 'COMPLETED'
     group by 1,2,3
 )
 ,mbp as (
@@ -534,7 +534,7 @@ with mex_datamart as (
     and date(orders.date_local) = date(mfp.date_local)
 
   LEFT JOIN batching
-    on orders.merchant_id = batching.restaurant_id
+    on orders.merchant_id = batching.merchant_id
     and orders.date_local = batching.date_local
     and orders.city_name = batching.city_name
 

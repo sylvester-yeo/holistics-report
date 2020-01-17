@@ -342,7 +342,7 @@ with mex_datamart as (
       --,sum(mfc.partner_promo_item_normal_price_local_non_mfc - mfc.partner_promo_item_promo_price_local_non_mfc) as partner_promo_item_price_diff_local_non_mfc
       ,sum(mfc.partner_promo_item_n_normal_price_usd_non_mfc - mfc.partner_promo_item_n_promo_price_usd_non_mfc) as partner_promo_item_price_diff_n_usd_non_mfc
       ,sum(mfc.partner_promo_item_n_normal_price_local_non_mfc - mfc.partner_promo_item_n_promo_price_local_non_mfc) as partner_promo_item_price_diff_n_local_non_mfc
-    from slide.gf_mfc_brand_daily mfc
+    from slide.gf_mfc_brand mfc
     left join datamart.dim_merchants mex on mfc.merchant_id = mex.merchant_id
     left join public.cities on mfc.city = cities.name
     where [[date(date_local) >= date({{start_date}})]]
@@ -373,10 +373,10 @@ with mex_datamart as (
         ,mfp.city
         ,sum(mex_mfp_spend_usd) as mex_mfp_spend_usd
         ,sum(mex_mfp_spend_local) as mex_mfp_spend_local
-    from slide.gf_mfp_merchant_daily mfp
+    from slide.gf_mfp_merchant mfp
     left join datamart.dim_merchants mex on mfp.merchant_id = mex.merchant_id
-    where [[(partition_date_local) >= (date({{start_date}}) - interval '1' day)]]
-        and [[(partition_date_local) <= (date({{end_date}}) + interval '1' day)]]
+    where [[date(partition_date_local) >= (date({{start_date}}) - interval '1' day)]]
+        and [[date(partition_date_local) <= (date({{end_date}}) + interval '1' day)]]
         and ([[mfp.merchant_id in ({{merchant_id}})]] or [[mex.business_name in ({{merchant_id}})]])
     group by 1,2,3
 )
@@ -575,7 +575,7 @@ select
     ,bd_partner_status
     ,business_model
     ,am_tagging
-    
+
     {{#if level_of_aggregation == 'Total'}}
         ,'Total' as time_aggregation
         ,[[date({{start_date}})]] as start_date
@@ -648,7 +648,7 @@ from final_table
 
 
 
-/* Previous code 
+/* Previous code
 select
     {{#if dimension_split == 'merchant'}}
          merchant_name as merchant_business_name

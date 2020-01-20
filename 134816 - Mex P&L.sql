@@ -201,7 +201,7 @@ with mex_datamart as (
     ,sum(case when a.business_model = 'Integrated' then gmv_local else 0 end) as im_gmv_local
 
   FROM
-    slide.gf_mex_level_daily_metrics_temp a
+    slide.gf_mex_level_daily_metrics a
   INNER JOIN mex_snapshots b --only within the date range
     on a.merchant_id = b.merchant_id
     AND date(a.date_local) = b.date_mex_snapshots

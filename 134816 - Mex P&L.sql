@@ -352,20 +352,6 @@ with mex_datamart as (
         and [[cities.country_id in ({{country_|noquote}})]]
     group by 1,2,3,4
 )
-/*
---collection rate is not factored in for now
-,comms as (
-    select
-        merchant_id
-        ,country_name
-        ,city_name
-        ,merchant_name
-        ,start_date_of_month
-        ,min(blended_collection_rate) as blended_collection_rate
-    from slide.gf_id_collection_rate_cm
-    group by 1,2,3,4,5
-)
-*/
 ,mfp as (
     select
         date_local
@@ -375,8 +361,8 @@ with mex_datamart as (
         ,sum(mex_mfp_spend_local) as mex_mfp_spend_local
     from slide.gf_mfp_merchant mfp
     left join datamart.dim_merchants mex on mfp.merchant_id = mex.merchant_id
-    where [[date(partition_date_local) >= (date({{start_date}}) - interval '1' day)]]
-        and [[date(partition_date_local) <= (date({{end_date}}) + interval '1' day)]]
+    where [[date(date_local) >= (date({{start_date}}) - interval '1' day)]]
+        and [[date(date_local) <= (date({{end_date}}) + interval '1' day)]]
         and ([[mfp.merchant_id in ({{merchant_id}})]] or [[mex.business_name in ({{merchant_id}})]])
     group by 1,2,3
 )

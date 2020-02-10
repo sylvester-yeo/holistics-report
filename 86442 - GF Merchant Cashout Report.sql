@@ -51,6 +51,7 @@ left join
 select
 fo.order_id,
 fo.last_booking_code,
+coalesce(fo.last_booking_code, fo.order_id) as booking_code_order_id,
 fo.merchant_id,
 fo.short_order_number,
 date(from_utc_timestamp(fo.created_time, cities.time_zone)) as order_create_date_local,
@@ -58,7 +59,6 @@ gms.name
 from public.prejoin_food_order fo
 left join public.cities on fo.city_id = cities.id
 left join grab_mall.grab_mall_seller gms on gms.id = fo.merchant_id
-left join datamart.dim_merchants on fo.merchant_id = dim_merchants.merchant_id
 -- where [[date(from_utc_timestamp(fo.created_time, cities.time_zone)) >= date({{start_date}}) - interval '3' DAY]]
 --     and [[date(from_utc_timestamp(fo.created_time, cities.time_zone)) <= date({{end_date}}) + interval '3' DAY]]
 --     and [[fo.partition_date >= date_format(date({{ start_date }}) - interval '3' DAY, '%Y-%m-%d')]]
@@ -71,7 +71,8 @@ where [[date(from_utc_timestamp(fo.created_time, cities.time_zone)) >= date({{st
     and [[fo.partition_date <= date_format(date({{ end_date }}) + interval {{ interval_window }} DAY, '%Y-%m-%d')]]
     and [[fo.partition_date >= date_format(date({{ updated_start_date }}) - interval {{ interval_window }} DAY, '%Y-%m-%d')]]
     and [[fo.partition_date <= date_format(date({{ updated_end_date }}) + interval {{ interval_window }} DAY, '%Y-%m-%d')]]
-)fo on tx.orderid = fo.last_booking_code
+)fo on tx.orderid = fo.booking_code_order_id
+left join datamart.dim_merchants on fo.merchant_id = dim_merchants.merchant_id
 where upper(Partnerid) = 'GRABFOOD'
 --and currency IN ('SGD','MYR')
 and [[tx.currency in ({{currency}})]]

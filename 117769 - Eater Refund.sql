@@ -1,4 +1,14 @@
-with refunds as (
+with countries as (
+    select 
+        id
+        ,name
+        ,currency_symbol
+        ,iso_currency
+        ,country_timezone
+    from public.countries 
+    where id <= 6 --filter out the main 6 countries
+)
+,refunds as (
     select
         ptb.passenger_id
         ,refund.booking_code
@@ -6,13 +16,13 @@ with refunds as (
         ,count(1) as no_of_entries_in_grab_money_schema
         ,sum(refund.credit) as credit
         ,max(refund.balance) as balance
-        ,min(from_utc_timestamp(refund.tx_time, cities.time_zone)) as first_transaction_time
-        ,max(from_utc_timestamp(refund.tx_time, cities.time_zone)) as last_transaction_time
+        ,min(from_utc_timestamp(refund.tx_time, countries.country_timezone)) as first_transaction_time
+        ,max(from_utc_timestamp(refund.tx_time, countries.country_timezone)) as last_transaction_time
     from grab_money.booking_refund_approved refund
     inner join grab_money.payment_to_booking ptb
         on refund.booking_code=ptb.booking_code
-    left join public.countries on refund.currency = countries.currency_symbol
-    left join public.cities on cities.country_id = countries.id
+    left join countries on refund.currency = countries.iso_currency
+    -- left join public.cities on cities.country_id = countries.id
     where ptb.driver_id=-999 and refund.tx_action <> 4
         and [[(concat(refund.year,'-',refund.month,'-',refund.day)) >= date_format(date({{transaction_start_date}}) - interval '1' DAY, '%Y-%m-%d')]]
         and [[(concat(refund.year,'-',refund.month,'-',refund.day)) <= date_format(date({{transaction_end_date}}) + interval '1' DAY , '%Y-%m-%d')]]
@@ -21,7 +31,7 @@ with refunds as (
         and [[(concat(ptb.year,'-',ptb.month,'-',ptb.day)) >= date_format(date({{transaction_start_date}}) - interval '30' DAY, '%Y-%m-%d')]]
         and [[(concat(ptb.year,'-',ptb.month,'-',ptb.day)) <= date_format(date({{transaction_end_date}}) + interval '1' DAY , '%Y-%m-%d')]]
         and [[countries.id in ({{country|noquote}})]]
-        and [[cities.id in ({{cities|noquote}})]]
+        -- and [[cities.id in ({{cities|noquote}})]]
     group by 1,2,3
 )
 /*,tolong_base as (
@@ -50,12 +60,12 @@ with refunds as (
     select tickets.*
     from zendesk.tickets
     left join public.countries on tickets.country = lower(countries.code)
-    left join public.cities on cities.country_id = countries.id
+    -- left join public.cities on cities.country_id = countries.id
     where tickets.service = 'grabfood'
         and [[date(concat(substr(tickets.partition_date,1,4),'-',substr(tickets.partition_date,5,2),'-',substr(tickets.partition_date,-2))) >= date( {{transaction_start_date}} ) - interval '14' DAY]]
         and [[date(concat(substr(tickets.partition_date,1,4),'-',substr(tickets.partition_date,5,2),'-',substr(tickets.partition_date,-2))) <= date( {{transaction_end_date}} ) + interval '1' DAY]]
         and [[countries.id in ({{country|noquote}})]]
-        and [[cities.id in ({{cities|noquote}})]]
+        -- and [[cities.id in ({{cities|noquote}})]]
 )
 {{#if show_past_pax_order_history == 'yes'}}
 ,past_pax_history as (
@@ -65,11 +75,13 @@ with refunds as (
         ,date({{transaction_start_date}}) as end_date
         ,count(1) as total_attempted_orders
         ,sum(case when booking_state_simple = 'COMPLETED' then 1 else 0 end) as total_completed_orders
-        ,sum(case when booking_state_simple = 'COMPLETED' then basket_size else 0 end) as total_basket_size_pre_discount
-        ,sum(case when booking_state_simple = 'COMPLETED' then basket_size - promo_expense else 0 end) as total_basket_size_after_discount
+        ,sum(case when booking_state_simple = 'COMPLETED' then basket_size/fx_one_usd else 0 end) as total_basket_size_pre_discount_usd
+        ,sum(case when booking_state_simple = 'COMPLETED' then (basket_size - promo_expense)/fx_one_usd else 0 end) as total_basket_size_after_discount_usd
     from datamart_grabfood.base_bookings
-    where [[date(date_local) >= date({{transaction_start_date}}) - interval '14' day]]
-        and [[date(date_local) <= date({{transaction_start_date}})]]
+    where [[date(date_local) >= date_add('day', - cast(({{past_number_of_days}}) as int), date({{transaction_start_date}}))]]
+        and [[date(date_local) < date({{transaction_start_date}})]]
+        and [[country_id in ({{country|noquote}})]]
+        and [[city_id in ({{cities|noquote}})]]
     group by 1,2,3
 )
 {{#endif}}
@@ -97,15 +109,15 @@ with refunds as (
         ,remarks
         ,json_parse(refunds.refund_items) as refund_items
     from pax.refunds
-    left join public.countries on refunds.currency = countries.currency_symbol
-    left join public.cities on cities.country_id = countries.id
+    left join countries on refunds.currency = countries.iso_currency
+    -- left join public.cities on cities.country_id = countries.id
     where [[date(refunds.year||'-'||refunds.month||'-'||refunds.day) >= date( {{transaction_start_date}} ) - interval '30' DAY]]
         and [[date(refunds.year||'-'||refunds.month||'-'||refunds.day) <= date( {{transaction_end_date}} ) + interval '1' DAY]]
         and [[date(substr(refunds.created_at,1,10)) >= date({{transaction_start_date}})]]
         and [[date(substr(refunds.created_at,1,10)) <= date({{transaction_end_date}})]]
         and source_category = 'FOOD'
         and [[countries.id in ({{country|noquote}})]]
-        and [[cities.id in ({{cities|noquote}})]]
+        -- and [[cities.id in ({{cities|noquote}})]]
 )
 ,item_level_breakdown as (
     select
@@ -180,8 +192,8 @@ select
     ,past_pax_history.end_date
     ,past_pax_history.total_attempted_orders
     ,past_pax_history.total_completed_orders
-    ,past_pax_history.total_basket_size_pre_discount
-    ,past_pax_history.total_basket_size_after_discount
+    ,past_pax_history.total_basket_size_pre_discount_usd
+    ,past_pax_history.total_basket_size_after_discount_usd
     {{#endif}}
 
 from item_level_breakdown
@@ -238,8 +250,8 @@ select
     ,past_pax_history.end_date
     ,past_pax_history.total_attempted_orders
     ,past_pax_history.total_completed_orders
-    ,past_pax_history.total_basket_size_pre_discount
-    ,past_pax_history.total_basket_size_after_discount
+    ,past_pax_history.total_basket_size_pre_discount_usd
+    ,past_pax_history.total_basket_size_after_discount_usd
     {{#endif}}
 from refunds
 left join public.passengers on refunds.passenger_id = passengers.id

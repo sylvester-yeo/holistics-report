@@ -188,7 +188,7 @@ with fo as (
         ,cast(json_extract_scalar(py.metadata, '$.orderValue') as double)/100 as order_value_pre_tax
         ,coalesce(cast(json_extract_scalar(py.metadata, '$.taxes') as double)/100, 0) as tax_value
         ,coalesce(cast(json_extract_scalar(py.metadata, '$.exDeliveryFee') as double)/100, 0) as pax_delivery_fee
-        ,coalesce(cast(json_extract_scalar(py.metadata, '$.mexFundCampaign') as double)/100, 0) as total_mex_funded_discount_exc_tax
+        ,coalesce(cast(json_extract_scalar(py.metadata, '$.mexFundCampaign') as double)/100, 0) + coalesce(cast(json_extract_scalar(py.metadata, '$.mexFundPromo') as double)/100, 0) as total_mex_funded_discount_exc_tax
         ,coalesce(cast(json_extract_scalar(py.metadata, '$.revenue') as double)/100, 0) as revenue_to_mex
         ,coalesce(cast(json_extract_scalar(py.metadata, '$.GKCommission') as double)/100, 0) as gk_commission
         ,coalesce(cast(json_extract_scalar(py.metadata, '$.mexCommission') as double)/100, 0) as gf_commission

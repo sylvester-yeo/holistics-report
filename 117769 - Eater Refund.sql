@@ -71,15 +71,15 @@ with countries as (
 ,past_pax_history as (
     select
         passenger_id
-        ,date({{transaction_start_date}}) - interval '14' day as start_date
-        ,date({{transaction_start_date}}) as end_date
+        ,date({{past_pax_history_start_date}}) as start_date
+        ,date({{past_pax_history_end_date}}) as end_date
         ,count(1) as total_attempted_orders
         ,sum(case when booking_state_simple = 'COMPLETED' then 1 else 0 end) as total_completed_orders
         ,sum(case when booking_state_simple = 'COMPLETED' then basket_size/fx_one_usd else 0 end) as total_basket_size_pre_discount_usd
         ,sum(case when booking_state_simple = 'COMPLETED' then (basket_size - promo_expense)/fx_one_usd else 0 end) as total_basket_size_after_discount_usd
     from datamart_grabfood.base_bookings
-    where [[date(date_local) >= date_add('day', - cast(({{past_number_of_days}}) as int), date({{transaction_start_date}}))]]
-        and [[date(date_local) < date({{transaction_start_date}})]]
+    where [[date(date_local) >= date({{past_pax_history_start_date}})]]
+        and [[date(date_local) <= date({{past_pax_history_end_date}})]]
         and [[country_id in ({{country|noquote}})]]
         and [[city_id in ({{cities|noquote}})]]
     group by 1,2,3

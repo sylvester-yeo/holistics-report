@@ -133,6 +133,10 @@ with mex_datamart as (
     ,sum(a.delivery_fare_gf_local) as delivery_fare_local
     ,sum(a.dax_delivery_fare) as dax_delivery_fare_usd
     ,sum(a.dax_delivery_fare_local) as dax_delivery_fare_local
+    ,sum(a.tsp_subsidy) as tsp_subsidy_local
+    ,sum(a.tsp_subsidy_usd) as tsp_subsidy_usd
+    ,sum(a.sof_local) as sof_local
+    ,sum(a.sof_usd) as sof_usd
     ,sum(a.driver_commission) as driver_commission_usd
     ,sum(a.driver_commission_local) as driver_commission_local
     ,sum(a.cancellations) as total_cancellations
@@ -174,6 +178,10 @@ with mex_datamart as (
     ,sum(case when a.restaurant_partner_status = 'partner' then a.delivery_fare_gf_local END) as total_partner_delivery_fare_local
     ,sum(case when a.restaurant_partner_status = 'partner' then a.dax_delivery_fare END) as total_partner_dax_delivery_fare_usd
     ,sum(case when a.restaurant_partner_status = 'partner' then a.dax_delivery_fare_local END) as total_partner_dax_delivery_fare_local
+    ,sum(case when a.restaurant_partner_status = 'partner' then a.tsp_subsidy END) as total_partner_tsp_subsidy_local
+    ,sum(case when a.restaurant_partner_status = 'partner' then a.tsp_subsidy_usd END) as total_partner_tsp_subsidy_usd
+    ,sum(case when a.restaurant_partner_status = 'partner' then a.sof_local END) as total_partner_sof_local
+    ,sum(case when a.restaurant_partner_status = 'partner' then a.sof_usd END) as total_partner_sof_usd
     ,sum(case when a.restaurant_partner_status = 'partner' then a.driver_commission END) as total_partner_driver_commission_usd
     ,sum(case when a.restaurant_partner_status = 'partner' then a.driver_commission_local END) as total_partner_driver_commission_local_usd
     ,sum(case when a.restaurant_partner_status = 'partner' then a.cancellations END) as total_partner_total_cancellations
@@ -201,7 +209,7 @@ with mex_datamart as (
     ,sum(case when a.business_model = 'Integrated' then gmv_local else 0 end) as im_gmv_local
 
   FROM
-    slide.gf_mex_level_daily_metrics a
+    slide.gf_mex_level_daily_metrics_temp a
   INNER JOIN mex_snapshots b --only within the date range
     on a.merchant_id = b.merchant_id
     AND date(a.date_local) = b.date_mex_snapshots
@@ -398,6 +406,7 @@ with mex_datamart as (
     ,orders.mex_commission_usd
     ,orders.delivery_fare_usd
     ,orders.dax_delivery_fare_usd
+    ,orders.tsp_subsidy_usd
     ,orders.driver_commission_usd
     ,orders.incentives_usd
     ,orders.spot_incentive_bonus_usd
@@ -411,6 +420,7 @@ with mex_datamart as (
     ,orders.total_partner_base_for_mex_commission_usd
     ,orders.total_partner_delivery_fare_usd
     ,orders.total_partner_dax_delivery_fare_usd
+    ,orders.total_partner_tsp_subsidy_usd
     ,orders.total_partner_driver_commission_usd
     ,orders.total_partner_incentives_usd
     ,orders.total_partner_spot_incentive_bonus_usd
@@ -423,6 +433,7 @@ with mex_datamart as (
     ,orders.mex_commission_local
     ,orders.delivery_fare_local
     ,orders.dax_delivery_fare_local
+    ,orders.tsp_subsidy_local
     ,orders.driver_commission_local
     ,orders.incentives_local
     ,orders.spot_incentive_bonus_local
@@ -434,6 +445,7 @@ with mex_datamart as (
     ,orders.total_partner_mex_commission_local
     ,orders.total_partner_delivery_fare_local
     ,orders.total_partner_dax_delivery_fare_local
+    ,orders.total_partner_tsp_subsidy_local
     ,orders.total_partner_driver_commission_local_usd
     ,orders.total_partner_incentives_local
     ,orders.total_partner_spot_incentive_bonus_local
@@ -614,13 +626,13 @@ select
     ,sum(mex_commission_usd + driver_commission_usd) as total_gross_revenue_usd
     ,sum(incentives_usd) as incentives_usd
     ,sum(spot_incentive_bonus_usd) as spot_incentive_bonus_usd
-    ,sum(dax_delivery_fare_usd-delivery_fare_usd+incentives_usd+spot_incentive_bonus_usd) as total_incentives_spend_usd
-    ,sum(dax_delivery_fare_usd-delivery_fare_usd+incentives_usd+spot_incentive_bonus_usd - mbp_paid_by_mex) as total_incentives_spend_usd_excl_mbp
+    ,sum(tsp_subsidy_usd+incentives_usd+spot_incentive_bonus_usd) as total_incentives_spend_usd
+    ,sum(tsp_subsidy_usd+incentives_usd+spot_incentive_bonus_usd - mbp_paid_by_mex) as total_incentives_spend_usd_excl_mbp
     ,sum(mex_promo_spend_n_usd) as mfc_mex_promo_spend_usd
     ,sum(mf_promo_code_perday_outlet_usd) as mfp_mex_promo_spend_usd
     ,sum(mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd) as total_mfd_usd
     ,sum(promo_expense_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as promo_expense_usd
-    ,cast(sum(mex_commission_usd + driver_commission_usd - (incentives_usd + spot_incentive_bonus_usd + dax_delivery_fare_usd - delivery_fare_usd) - (promo_expense_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) + (mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd)) as double) / sum(gmv_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as ppgmv
+    ,cast(sum(mex_commission_usd + driver_commission_usd - (incentives_usd + spot_incentive_bonus_usd + tsp_subsidy_usd) - (promo_expense_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) + (mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd)) as double) / sum(gmv_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as ppgmv
 
     ,avg(fx_one_usd) as avg_fx_one_usd
 
@@ -684,7 +696,7 @@ select
     ,sum(mf_promo_code_perday_outlet_usd) as mfp_mex_promo_spend_usd
     ,sum(mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd) as total_mfd_usd
     ,sum(promo_expense_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as promo_expense_usd
-    ,cast(sum(mex_commission_usd + driver_commission_usd - (incentives_usd + spot_incentive_bonus_usd + dax_delivery_fare_usd - delivery_fare_usd) - (promo_expense_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) + (mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd)) as double) / sum(gmv_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as ppgmv
+    ,cast(sum(mex_commission_usd + driver_commission_usd - (incentives_usd + spot_incentive_bonus_usd + tsp_subsidy_usd) - (promo_expense_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) + (mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd)) as double) / sum(gmv_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as ppgmv
 
     ,avg(fx_one_usd) as avg_fx_one_usd
 
@@ -747,7 +759,7 @@ union all (
     ,sum(mf_promo_code_perday_outlet_usd) as mfp_mex_promo_spend_usd
     ,sum(mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd) as total_mfd_usd
     ,sum(promo_expense_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as promo_expense_usd
-    ,cast(sum(mex_commission_usd + driver_commission_usd - (incentives_usd + spot_incentive_bonus_usd + dax_delivery_fare_usd - delivery_fare_usd) - (promo_expense_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) + (mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd)) as double) / sum(gmv_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as ppgmv
+    ,cast(sum(mex_commission_usd + driver_commission_usd - (incentives_usd + spot_incentive_bonus_usd + tsp_subsidy_usd) - (promo_expense_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) + (mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd)) as double) / sum(gmv_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as ppgmv
 
     ,avg(fx_one_usd) as avg_fx_one_usd
 
@@ -812,7 +824,7 @@ union all (
     ,sum(mf_promo_code_perday_outlet_usd) as mfp_mex_promo_spend_usd
     ,sum(mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd) as total_mfd_usd
     ,sum(promo_expense_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as promo_expense_usd
-    ,cast(sum(mex_commission_usd + driver_commission_usd - (incentives_usd + spot_incentive_bonus_usd + dax_delivery_fare_usd - delivery_fare_usd) - (promo_expense_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) + (mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd)) as double) / sum(gmv_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as ppgmv
+    ,cast(sum(mex_commission_usd + driver_commission_usd - (incentives_usd + spot_incentive_bonus_usd + tsp_subsidy_usd) - (promo_expense_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) + (mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd)) as double) / sum(gmv_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as ppgmv
 
     ,avg(fx_one_usd) as avg_fx_one_usd
 
@@ -871,7 +883,7 @@ union all (
     ,sum(mf_promo_code_perday_outlet_usd) as mfp_mex_promo_spend_usd
     ,sum(mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd) as total_mfd_usd
     ,sum(promo_expense_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as promo_expense_usd
-    ,cast(sum(mex_commission_usd + driver_commission_usd - (incentives_usd + spot_incentive_bonus_usd + dax_delivery_fare_usd - delivery_fare_usd) - (promo_expense_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) + (mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd)) as double) / sum(gmv_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as ppgmv
+    ,cast(sum(mex_commission_usd + driver_commission_usd - (incentives_usd + spot_incentive_bonus_usd + tsp_subsidy_usd) - (promo_expense_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) + (mex_promo_spend_n_usd + mf_promo_code_perday_outlet_usd)) as double) / sum(gmv_usd + mex_promo_spend_n_usd_non_mfc + grab_promo_spend_n_usd_non_mfc) as ppgmv
 
     ,avg(fx_one_usd) as avg_fx_one_usd
 

@@ -3,7 +3,8 @@
 /*116820*/
 with fo as (
     SELECT
-        json_extract(snapshot_detail,'$.cartWithQuote.discounts') AS array_discount
+        case when order_type = 1 then date_diff('second', ord_new_time, pre_accepted_time) else null end as integrated_time_diff
+        ,json_extract(snapshot_detail,'$.cartWithQuote.discounts') AS array_discount
         -- ,(case when json_extract_scalar(snapshot_detail, '$.newTaxFlow') = 'true' then
         --             cast(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.priceInMinorUnit') as double) - COALESCE(cast(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.inclTaxInMin') as double),0)
         --             else cast(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.priceInMinorUnit') as double) end)/100 as order_value_pre_tax
@@ -12,13 +13,25 @@ with fo as (
         ,(case when json_extract_scalar(snapshot_detail, '$.newTaxFlow') = 'true' then cast(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.priceInMinorUnit') as double)
                     else cast(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.priceInMinorUnit') as double) + COALESCE(cast(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.inclTaxInMin') as double),0) end)/100
                     as order_value_with_tax
+        /*Total comms values */
         ,(cast(coalesce(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.mexCommission'), '0.0') as double) + cast(coalesce(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.gkCommission'),'0.0') as double))/100 as mex_commission
         ,cast(coalesce(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.mexCommission'), '0.0') as double) / 100 as grabfood_commission
         ,cast(coalesce(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.gkCommission'), '0.0') as double) / 100 as grabkitchen_commission
+        /*SuC only values */
+        ,(cast(coalesce(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.additionalCommissions.stepUpCommission'), '0.0') as double) + cast(coalesce(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.additionalCommissions.stepUpGKCommission'),'0.0') as double))/100 as mex_commission_suc
+        ,cast(coalesce(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.additionalCommissions.stepUpCommission'), '0.0') as double) / 100 as grabfood_commission_suc
+        ,cast(coalesce(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.additionalCommissions.stepUpGKCommission'), '0.0') as double) / 100 as grabkitchen_commission_suc
+        /*original comms rate*/
         ,coalesce(cast(json_extract_scalar(CAST(json_extract(fo.snapshot_detail, '$.cartWithQuote.merchantCartWithQuoteList') AS ARRAY(json))[1], '$.merchantInfoObj.commission') as double), 0)
         + coalesce(cast(json_extract_scalar(CAST(json_extract(fo.snapshot_detail, '$.cartWithQuote.merchantCartWithQuoteList') AS ARRAY(json))[1], '$.merchantInfoObj.gkCommissionRate') as double), 0) as mex_commission_rate
         ,cast(json_extract_scalar(CAST(json_extract(fo.snapshot_detail, '$.cartWithQuote.merchantCartWithQuoteList') AS ARRAY(json))[1], '$.merchantInfoObj.commission') as double) as grabfood_commission_rate
         ,cast(json_extract_scalar(CAST(json_extract(fo.snapshot_detail, '$.cartWithQuote.merchantCartWithQuoteList') AS ARRAY(json))[1], '$.merchantInfoObj.gkCommissionRate') as double) as grabkitchen_commission_rate
+        /*SuC comms rate*/
+        ,coalesce(cast(json_extract_scalar(CAST(json_extract(fo.snapshot_detail, '$.cartWithQuote.merchantCartWithQuoteList') AS ARRAY(json))[1], '$.merchantInfoObj.additionalCommissionRates.stepUpCommissionRate') as double), 0)
+        + coalesce(cast(json_extract_scalar(CAST(json_extract(fo.snapshot_detail, '$.cartWithQuote.merchantCartWithQuoteList') AS ARRAY(json))[1], '$.merchantInfoObj.additionalCommissionRates.stepUpGKCommissionRate') as double), 0) as mex_commission_rate_suc
+        ,cast(json_extract_scalar(CAST(json_extract(fo.snapshot_detail, '$.cartWithQuote.merchantCartWithQuoteList') AS ARRAY(json))[1], '$.merchantInfoObj.additionalCommissionRates.stepUpCommissionRate') as double) as grabfood_commission_rate_suc
+        ,cast(json_extract_scalar(CAST(json_extract(fo.snapshot_detail, '$.cartWithQuote.merchantCartWithQuoteList') AS ARRAY(json))[1], '$.merchantInfoObj.additionalCommissionRates.stepUpGKCommissionRate') as double) as grabkitchen_commission_rate_suc
+
         ,coalesce(cast(json_extract_scalar(json_parse(snapshot_detail), '$.cartWithQuote.promoCodes[0].promoAmountInMin') as double),0) / power(double '10.0', coalesce(cast(json_extract_scalar(snapshot_detail, '$.currency.exponent') as int),0)) as promo_expense
         ,coalesce(json_extract_scalar(snapshot_detail, '$.cartWithQuote.promoCodes[0].promoCode'),'') as promo_code
         ,coalesce(cast(json_extract(cast(json_extract(json_parse(snapshot_detail), '$.cartWithQuote.merchantCartWithQuoteList') as array<json>)[1], '$.merchantInfoObj.taxRate') as double), fo.tax) as tax_perc
@@ -47,10 +60,10 @@ with fo as (
 		OR json_extract_scalar(fo.snapshot_detail, '$.deliveryOption') is null)
 		{{#endif}}
         {{#if final_state == 'completed_only'}} --1st addition
-        and fo.order_state = 11
+        and (fo.order_state = 11)
         {{#endif}}
         {{#if final_state == 'exclude_completed_orders'}} --2nd addition
-        and fo.order_state <> 11
+        and (fo.order_state <> 11)
         {{#endif}}
         {{#if qsr_pos_integrated_only == 'no'}}
         and json_extract_scalar(snapshot_detail, '$.cartWithQuote.merchantCartWithQuoteList[0].merchantInfoObj.qsrCode') is null
@@ -101,8 +114,8 @@ with fo as (
     where
         upper(Partnerid) = 'GRABFOOD'
         and ((currency in ('SGD','MYR') and txtype = 60) or (currency = 'THB' and txtype in (56,60)))
-        and concat(YEAR, '-', lpad(MONTH, 2, '0'), '-', lpad(day, 2, '0')) >= date_format(date({{ order_create_start_date }}) - interval '1' DAY, '%Y-%m-%d')
-        and concat(YEAR, '-', lpad(MONTH, 2, '0'), '-', lpad(day, 2, '0')) <= date_format(date({{ order_create_end_date }}) + interval '1' DAY , '%Y-%m-%d')
+        and concat(YEAR, '-', lpad(MONTH, 2, '0'), '-', lpad(day, 2, '0')) >= date_format(date({{ order_create_start_date }}) - interval '15' DAY, '%Y-%m-%d')
+        and concat(YEAR, '-', lpad(MONTH, 2, '0'), '-', lpad(day, 2, '0')) <= date_format(date({{ order_create_end_date }}) + interval '15' DAY , '%Y-%m-%d')
 )
 ,fo_gkmm as (
     select
@@ -147,13 +160,25 @@ with fo as (
                 coalesce(cast(json_extract_scalar(sub_merchant, '$.subFoodQuoteInMin.gkCommission') as double), 0)
             ) / 100
             as commission_value
+            ,(coalesce(cast(json_extract_scalar(sub_merchant, '$.subFoodQuoteInMin.additionalCommissions.stepUpCommission') as double), 0) +
+                coalesce(cast(json_extract_scalar(sub_merchant, '$.subFoodQuoteInMin.additionalCommissions.stepUpGKCommission') as double), 0)
+            ) / 100
+            as commission_value_suc
             ,(coalesce(cast(json_extract_scalar(sub_merchant, '$.merchantInfoObj.commission') as double), 0) +
                 coalesce(cast(json_extract_scalar(sub_merchant, '$.merchantInfoObj.gkCommissionRate') as double), 0)
             ) as commission_rate
+            ,(coalesce(cast(json_extract_scalar(sub_merchant, '$.merchantInfoObj.additionalCommissionRates.stepUpCommissionRate') as double), 0) +
+                coalesce(cast(json_extract_scalar(sub_merchant, '$.merchantInfoObj.additionalCommissionRates.stepUpGKCommissionRate') as double), 0)
+            ) as commission_rate_suc
             ,coalesce(cast(json_extract_scalar(sub_merchant, '$.subFoodQuoteInMin.mexCommission') as double), 0)/100 as commission_value_grabfood
             ,coalesce(cast(json_extract_scalar(sub_merchant, '$.merchantInfoObj.commission') as double), 0) as commission_rate_grabfood
+            ,coalesce(cast(json_extract_scalar(sub_merchant, '$.subFoodQuoteInMin.additionalCommissions.stepUpCommission') as double), 0)/100 as commission_value_grabfood_suc
+            ,coalesce(cast(json_extract_scalar(sub_merchant, '$.merchantInfoObj.additionalCommissionRates.stepUpCommissionRate') as double), 0) as commission_rate_grabfood_suc
             ,coalesce(cast(json_extract_scalar(sub_merchant, '$.subFoodQuoteInMin.gkCommission') as double), 0)/100 as commission_value_grabkitchen
             ,coalesce(cast(json_extract_scalar(sub_merchant, '$.merchantInfoObj.gkCommissionRate') as double), 0) as commission_rate_grabkitchen
+            ,coalesce(cast(json_extract_scalar(sub_merchant, '$.subFoodQuoteInMin.additionalCommissions.stepUpGKCommission') as double), 0)/100 as commission_value_grabkitchen_suc
+            ,coalesce(cast(json_extract_scalar(sub_merchant, '$.merchantInfoObj.additionalCommissionRates.stepUpGKCommissionRate') as double), 0) as commission_rate_grabkitchen_suc
+
             -- as of right now, there is no MFC that can be applied on a mex level
             ,(cast(json_extract_scalar(sub_merchant, '$.subFoodQuoteInMin.priceExcludeTaxInMinorUnit') as double) / 100)
             - ((coalesce(cast(json_extract_scalar(sub_merchant, '$.subFoodQuoteInMin.mexCommission') as double), 0) + coalesce(cast(json_extract_scalar(sub_merchant, '$.subFoodQuoteInMin.gkCommission') as double), 0)) / 100)
@@ -170,7 +195,7 @@ with fo as (
         -- Join needs to be done on booking code and merchant id level since 1 booking code can
         -- have more than 1 merchant contained in them for GKMM orders
         gkmm_order_breakdown.gkmm_sub_merchant_id = gp_tx.merchant_id
-        and gkmm_order_breakdown.last_booking_code = gp_tx.booking_code
+        and coalesce(gkmm_order_breakdown.last_booking_code, gkmm_order_breakdown.order_id) = gp_tx.booking_code
     left join food_data_service.merchants as mex on mex.merchant_id = gkmm_order_breakdown.gkmm_sub_merchant_id
     left join food_data_service.merchant_contracts as mex_con on mex_con.merchant_id = gkmm_order_breakdown.gkmm_sub_merchant_id
     left join food_data_service.merchant_clusters on merchant_clusters.merchant_cluster_id = gkmm_order_breakdown.merchant_cluster_id
@@ -192,9 +217,11 @@ with fo as (
         ,coalesce(cast(json_extract_scalar(py.metadata, '$.revenue') as double)/100, 0) as revenue_to_mex
         ,coalesce(cast(json_extract_scalar(py.metadata, '$.GKCommission') as double)/100, 0) as gk_commission
         ,coalesce(cast(json_extract_scalar(py.metadata, '$.mexCommission') as double)/100, 0) as gf_commission
+        ,coalesce(cast(json_extract_scalar(py.metadata, '$.mexStepUpGKCommission') as double)/100, 0) as gk_commission_suc
+        ,coalesce(cast(json_extract_scalar(py.metadata, '$.mexStepUpCommission') as double)/100, 0) as gf_commission_suc
     from grab_food.payments py
     where py.year||'-'||py.month||'-'||py.day <= date_format(date({{ order_create_start_date }}) + interval '10' DAY , '%Y-%m-%d')
-        and py.year||'-'||py.month||'-'||py.day >= date_format(date({{ order_create_start_date }}) - interval '1' DAY , '%Y-%m-%d')
+        and py.year||'-'||py.month||'-'||py.day >= date_format(date({{ order_create_start_date }}) - interval '10' DAY , '%Y-%m-%d')
         and currency in ('SGD','MYR') --tbc on how to filter by country id
         and tx_type = 2 -- pay mex
 )
@@ -248,11 +275,11 @@ select
     ,coalesce(food_cashier.order_value_pre_tax, fo_gkmm.order_value, all_orders.order_value) as order_value
     ,coalesce(fo_gkmm.tax_perc, all_orders.tax_perc) as tax_perc
     ,coalesce(food_cashier.tax_value, fo_gkmm.tax_value, all_orders.tax_value) as tax_value
-    ,coalesce(food_cashier.gk_commission + food_cashier.gf_commission, fo_gkmm.commission_value, all_orders.commission_value) as commission_value
+    ,coalesce(food_cashier.gk_commission + food_cashier.gf_commission, fo_gkmm.commission_value, all_orders.commission_value) - coalesce(food_cashier.gk_commission_suc + food_cashier.gf_commission_suc, fo_gkmm.commission_value_suc, all_orders.commission_value_suc) as commission_value 
     ,coalesce(fo_gkmm.commission_rate, all_orders.commission_rate) as commission_rate
-    ,coalesce(food_cashier.gf_commission, fo_gkmm.commission_value_grabfood, all_orders.commission_value_grabfood) as commission_value_grabfood
+    ,coalesce(food_cashier.gf_commission, fo_gkmm.commission_value_grabfood, all_orders.commission_value_grabfood) - coalesce(food_cashier.gf_commission_suc, fo_gkmm.commission_value_grabfood_suc, all_orders.commission_value_grabfood_suc) as commission_value_grabfood
     ,coalesce(fo_gkmm.commission_rate_grabfood, all_orders.commission_rate_grabfood) as commission_rate_grabfood
-    ,coalesce(food_cashier.gk_commission, fo_gkmm.commission_value_grabkitchen, all_orders.commission_value_grabkitchen) as commission_value_grabkitchen
+    ,coalesce(food_cashier.gk_commission, fo_gkmm.commission_value_grabkitchen, all_orders.commission_value_grabkitchen) - coalesce(food_cashier.gk_commission_suc, fo_gkmm.commission_value_grabkitchen_suc, all_orders.commission_value_grabkitchen_suc)as commission_value_grabkitchen
     ,coalesce(fo_gkmm.commission_rate_grabkitchen, all_orders.commission_rate_grabkitchen) as commission_rate_grabkitchen
     ,coalesce(food_cashier.net_earning, fo_gkmm.net_payable, all_orders.net_payable) as net_payable
     ,all_orders.pay_status
@@ -279,6 +306,12 @@ select
     ,coalesce(fo_gkmm.transactionupdatedat, all_orders.transactionupdatedat) as transactionupdatedat
     ,coalesce(fo_gkmm.booking_code, all_orders.booking_code) as booking_code
     {{#endif}}
+    ,coalesce(food_cashier.gk_commission_suc + food_cashier.gf_commission_suc, fo_gkmm.commission_value_suc, all_orders.commission_value_suc) as commission_value_suc
+    ,coalesce(fo_gkmm.commission_rate_suc, all_orders.commission_rate_suc) as commission_rate_suc
+    ,coalesce(food_cashier.gf_commission_suc, fo_gkmm.commission_value_grabfood_suc, all_orders.commission_value_grabfood_suc) as commission_value_grabfood_suc
+    ,coalesce(fo_gkmm.commission_rate_grabfood_suc, all_orders.commission_rate_grabfood_suc) as commission_rate_grabfood_suc
+    ,coalesce(food_cashier.gk_commission_suc, fo_gkmm.commission_value_grabkitchen_suc, all_orders.commission_value_grabkitchen_suc) as commission_value_grabkitchen_suc
+    ,coalesce(fo_gkmm.commission_rate_grabkitchen_suc, all_orders.commission_rate_grabkitchen_suc) as commission_rate_grabkitchen_suc
 from (
     SELECT
         *
@@ -343,24 +376,30 @@ from (
             ,ROUND(coalesce(fo.tax_perc, fo.tax),2) as tax_perc
             ,ROUND(fo.tax_value,2) as tax_value
             ,ROUND(fo.mex_commission,2) as commission_value
+            ,ROUND(fo.mex_commission_suc,2) as commission_value_suc
             ,round(fo.mex_commission_rate,2) as commission_rate
-            ,ROUND(fo.grabfood_commission ,2) as commission_value_grabfood
+            ,round(fo.mex_commission_rate_suc,2) as commission_rate_suc
+            ,ROUND(fo.grabfood_commission,2) as commission_value_grabfood
+            ,ROUND(fo.grabfood_commission_suc,2) as commission_value_grabfood_suc
             ,round(fo.grabfood_commission_rate, 2) as commission_rate_grabfood
+            ,round(fo.grabfood_commission_rate_suc, 2) as commission_rate_grabfood_suc
             ,ROUND(fo.grabkitchen_commission ,2) as commission_value_grabkitchen
+            ,ROUND(fo.grabkitchen_commission_suc ,2) as commission_value_grabkitchen_suc
             ,round(fo.grabkitchen_commission_rate, 2) as commission_rate_grabkitchen
+            ,round(fo.grabkitchen_commission_rate_suc, 2) as commission_rate_grabkitchen_suc
             ,ROUND(fo.order_value_pre_tax + fo.tax_value - coalesce(mex_funded_fo.total_mex_funded_discount_exc_tax,0) - fo.mex_commission, 2) as net_payable
             --,case when fo.country_id = 4 then round(round((coalesce(fo.sub_total,bb.food_sub_total) * (1 + fo.tax)),2) - round((coalesce(fo.sub_total,bb.food_sub_total) * fo.commission * 1.07),2), 2) else round(round((coalesce(fo.sub_total,bb.food_sub_total) * (1 + fo.tax)),2) - round((coalesce(fo.sub_total,bb.food_sub_total) * fo.commission),2), 2) end as net_payable_mex
             --pay status
             ,CASE WHEN fo.pre_accepted_time IS NOT NULL and fo.ord_completed_time IS NOT NULL THEN 'pay'
                     WHEN fo.ord_completed_time IS NOT NULL THEN 'pay'
-                    When fo.pre_accepted_time IS NOT NULL and aa.auto_accept_order is not null and (fo.final_state = 'UNALLOCATED') THEN 'no pay'
-                    When fo.pre_accepted_time IS NOT NULL and aa.auto_accept_order is not null and ( fo.final_state = 'REALLOCATION_FAILED') THEN 'pay'
-                    When fo.pre_accepted_time IS NOT NULL and aa.auto_accept_order is not null and (fo.final_state = '' and fo.booking_state = 'UNALLOCATED') THEN 'no pay'
+                    When fo.pre_accepted_time IS NOT NULL and case when date_diff('day',date(created_time), current_date) <= 85 then aa.auto_accept_order is not null else integrated_time_diff <> 0 end and (fo.final_state = 'UNALLOCATED') THEN 'no pay'
+                    When fo.pre_accepted_time IS NOT NULL and case when date_diff('day',date(created_time), current_date) <= 85 then aa.auto_accept_order is not null else integrated_time_diff <> 0 end and ( fo.final_state = 'REALLOCATION_FAILED') THEN 'pay'
+                    When fo.pre_accepted_time IS NOT NULL and case when date_diff('day',date(created_time), current_date) <= 85 then aa.auto_accept_order is not null else integrated_time_diff <> 0 end and (fo.final_state = '' and fo.booking_state = 'UNALLOCATED') THEN 'no pay'
                     WHEN fo.pre_accepted_time IS NOT NULL THEN 'pay'
                     ELSE 'no pay' END AS pay_status
             ,CASE WHEN coalesce(fo.pre_accepted_time,fo.ord_order_in_prepare_time) IS NOT NULL THEN 'mex_auto_accept' ELSE NULL END AS mex_accept
             ,case when fo.metadata <> '' then
-            case when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or aa.auto_accept_order is not null then 'auto-accept' end
+            case when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or case when date_diff('day',date(created_time), current_date) <= 85 then aa.auto_accept_order is not null else integrated_time_diff <> 0 end then 'auto-accept' end
                 when coalesce(fo.pre_accepted_time,fo.ord_order_in_prepare_time) IS NOT NULL then 'manual-accept'
                 else null end as mex_auto_accept
         --   ,case when aa.auto_accept_order is not null then 'mex_auto_accept' else null end as mex_auto_accept_status
@@ -377,11 +416,11 @@ from (
             ,case when json_extract_scalar(fo.metadata, '$.partnerOrderSubmitTime') is not null then 1 else 0 end as qsr_pos_is_submitted
             ,case when json_extract_scalar(fo.metadata, '$.payMerchant') is not null then 1 else 0 end as qsr_pay_merchant
             ,case when fo.metadata <> '' then
-            case when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or aa.auto_accept_order is not null then 'mex_auto_accept' end
+            case when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or case when date_diff('day',date(created_time), current_date) <= 85 then aa.auto_accept_order is not null else integrated_time_diff <> 0 end then 'mex_auto_accept' end
             else null end as my_mex_auto_accept
             ,case when fo.metadata <> '' then
                 case
-                    when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or aa.auto_accept_order is not null then 'mex_accept'
+                    when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or case when date_diff('day',date(created_time), current_date) <= 85 then aa.auto_accept_order is not null else integrated_time_diff <> 0 end then 'mex_accept'
                     when coalesce(fo.pre_accepted_time,fo.ord_order_in_prepare_time) IS NOT NULL then 'mex_accept'
                     end
                 when coalesce(fo.pre_accepted_time,fo.ord_order_in_prepare_time) IS NOT NULL then 'mex_accept'
@@ -407,7 +446,7 @@ from (
         left join mex_funded_fo on fo.order_id = mex_funded_fo.order_id
         -- GP txn details
         left join gp_tx 
-            on fo.last_booking_code = gp_tx.booking_code
+            on coalesce(fo.last_booking_code, fo.order_id) = gp_tx.booking_code
             and fo.merchant_id = gp_tx.merchant_id
         --Auto accept details
         left join
@@ -469,12 +508,16 @@ left join fo_gkmm on fo_gkmm.order_id = all_orders.order_id
 left join food_cashier 
     on all_orders.order_id = food_cashier.order_id
     and food_cashier.merchant_id = all_orders.merchant_id 
+{{#if final_state == 'exclude_completed_orders'}} --temp fix 
+where (lower(final_state) <> 'completed')
+{{#endif}}
 {{#endif}}
 {{#if report_version == 'old'}}
 /*116820*/
 with fo as (
     SELECT
-        json_extract(snapshot_detail,'$.cartWithQuote.discounts') AS array_discount
+        case when order_type = 1 then date_diff('second', ord_new_time, pre_accepted_time) else null end as integrated_time_diff
+        ,json_extract(snapshot_detail,'$.cartWithQuote.discounts') AS array_discount
         -- ,(case when json_extract_scalar(snapshot_detail, '$.newTaxFlow') = 'true' then
         --             cast(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.priceInMinorUnit') as double) - COALESCE(cast(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.inclTaxInMin') as double),0)
         --             else cast(json_extract_scalar(snapshot_detail, '$.cartWithQuote.foodQuoteInMin.priceInMinorUnit') as double) end)/100 as order_value_pre_tax
@@ -597,14 +640,14 @@ SELECT
 	  --pay status
        ,CASE WHEN fo.pre_accepted_time IS NOT NULL and fo.ord_completed_time IS NOT NULL THEN 'pay'
              WHEN fo.ord_completed_time IS NOT NULL THEN 'pay'
-             When fo.pre_accepted_time IS NOT NULL and aa.auto_accept_order is not null and (fo.final_state = 'UNALLOCATED') THEN 'no pay'
-             When fo.pre_accepted_time IS NOT NULL and aa.auto_accept_order is not null and ( fo.final_state = 'REALLOCATION_FAILED') THEN 'pay'
-             When fo.pre_accepted_time IS NOT NULL and aa.auto_accept_order is not null and (fo.final_state = '' and fo.booking_state = 'UNALLOCATED') THEN 'no pay'
+             When fo.pre_accepted_time IS NOT NULL and case when date_diff('day',date(created_time), current_date) <= 85 then aa.auto_accept_order is not null else integrated_time_diff <> 0 end and (fo.final_state = 'UNALLOCATED') THEN 'no pay'
+             When fo.pre_accepted_time IS NOT NULL and case when date_diff('day',date(created_time), current_date) <= 85 then aa.auto_accept_order is not null else integrated_time_diff <> 0 end and ( fo.final_state = 'REALLOCATION_FAILED') THEN 'pay'
+             When fo.pre_accepted_time IS NOT NULL and case when date_diff('day',date(created_time), current_date) <= 85 then aa.auto_accept_order is not null else integrated_time_diff <> 0 end and (fo.final_state = '' and fo.booking_state = 'UNALLOCATED') THEN 'no pay'
              WHEN fo.pre_accepted_time IS NOT NULL THEN 'pay'
              ELSE 'no pay' END AS pay_status
       ,CASE WHEN coalesce(fo.pre_accepted_time,fo.ord_order_in_prepare_time) IS NOT NULL THEN 'mex_auto_accept' ELSE NULL END AS mex_accept
       ,case when fo.metadata <> '' then
-        case when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or aa.auto_accept_order is not null then 'auto-accept' end
+        case when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or case when date_diff('day',date(created_time), current_date) <= 85 then aa.auto_accept_order is not null else integrated_time_diff <> 0 end then 'auto-accept' end
             when coalesce(fo.pre_accepted_time,fo.ord_order_in_prepare_time) IS NOT NULL then 'manual-accept'
             else null end as mex_auto_accept
     --   ,case when aa.auto_accept_order is not null then 'mex_auto_accept' else null end as mex_auto_accept_status
@@ -622,11 +665,11 @@ SELECT
       ,case when json_extract_scalar(fo.metadata, '$.payMerchant') is not null then 1 else 0 end as qsr_pay_merchant
 
        ,case when fo.metadata <> '' then
-        case when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or aa.auto_accept_order is not null then 'mex_auto_accept' end
+        case when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or case when date_diff('day',date(created_time), current_date) <= 85 then aa.auto_accept_order is not null else integrated_time_diff <> 0 end then 'mex_auto_accept' end
         else null end as my_mex_auto_accept
     ,case when fo.metadata <> '' then
         case
-            when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or aa.auto_accept_order is not null then 'mex_accept'
+            when json_extract_scalar(json_parse(fo.metadata), '$.FPTAcceptedBy') = '3' or case when date_diff('day',date(created_time), current_date) <= 85 then aa.auto_accept_order is not null else integrated_time_diff <> 0 end then 'mex_accept'
             when coalesce(fo.pre_accepted_time,fo.ord_order_in_prepare_time) IS NOT NULL then 'mex_accept'
             end
         when coalesce(fo.pre_accepted_time,fo.ord_order_in_prepare_time) IS NOT NULL then 'mex_accept'
@@ -662,7 +705,9 @@ SELECT
     from grabpay_settlement.merchant_transactions
     where upper(Partnerid) = 'GRABFOOD'
     and ((currency in ('SGD','MYR') and txtype = 60) or (currency = 'THB' and txtype in (56,60)))
-    )gp_tx on fo.last_booking_code = gp_tx.booking_code
+    and [[date(year||'-'||month||'-'||day) >= date({{order_create_start_date}}) - interval '15' day]]
+    and [[date(year||'-'||month||'-'||day) <= date({{order_create_end_date}}) + interval '15' day]]
+    )gp_tx on coalesce(fo.last_booking_code, fo.order_id) = gp_tx.booking_code
     --Auto accept details
     left join
     (

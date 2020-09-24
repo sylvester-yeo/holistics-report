@@ -47,7 +47,7 @@ with fo as (
         and [[fo.merchant_id in ({{merchant}})]]
         and [[date(from_utc_timestamp(fo.created_time, cities.time_zone)) >= date({{order_create_start_date}})]]
         and [[date(from_utc_timestamp(fo.created_time, cities.time_zone)) <= date({{order_create_end_date}})]]
-        and [[date(from_utc_timestamp(fo.ord_completed_time, cities.time_zone)) >= date(date_format(date({{ order_delivered_start_date }}) - interval '1' DAY, '%Y-%m-%d'))]]
+        and [[date(from_utc_timestamp(fo.ord_completed_time, cities.time_zone)) >= date(date_format(date({{ order_delivered_start_date }}), '%Y-%m-%d'))]]
         and [[date(from_utc_timestamp(fo.ord_completed_time, cities.time_zone)) <= date(date_format(date({{ order_delivered_end_date }}) , '%Y-%m-%d'))]]
         and fo.partition_date >= date_format(date({{ order_create_start_date }}) - interval '1' DAY, '%Y-%m-%d')
         and fo.partition_date <= date_format(date({{ order_create_end_date }}) + interval '1' DAY , '%Y-%m-%d')
@@ -203,7 +203,7 @@ with fo as (
     left join xtramile.mlm_banks on mlm_banks.id = mlm_bank_details.bank_name_id
 )
 ,food_cashier as (
-    select 
+    select
         order_id
         ,booking_code
         ,mex_id as merchant_id
@@ -219,6 +219,7 @@ with fo as (
         ,coalesce(cast(json_extract_scalar(py.metadata, '$.mexCommission') as double)/100, 0) as gf_commission
         ,coalesce(cast(json_extract_scalar(py.metadata, '$.mexStepUpGKCommission') as double)/100, 0) as gk_commission_suc
         ,coalesce(cast(json_extract_scalar(py.metadata, '$.mexStepUpCommission') as double)/100, 0) as gf_commission_suc
+        ,coalesce(cast(json_extract_scalar(py.metadata, '$.deliveryCharge') as double)/100, 0) as express_del_fee
     from grab_food.payments py
     where py.year||'-'||py.month||'-'||py.day <= date_format(date({{ order_create_start_date }}) + interval '10' DAY , '%Y-%m-%d')
         and py.year||'-'||py.month||'-'||py.day >= date_format(date({{ order_create_start_date }}) - interval '10' DAY , '%Y-%m-%d')
@@ -275,7 +276,7 @@ select
     ,coalesce(food_cashier.order_value_pre_tax, fo_gkmm.order_value, all_orders.order_value) as order_value
     ,coalesce(fo_gkmm.tax_perc, all_orders.tax_perc) as tax_perc
     ,coalesce(food_cashier.tax_value, fo_gkmm.tax_value, all_orders.tax_value) as tax_value
-    ,coalesce(food_cashier.gk_commission + food_cashier.gf_commission, fo_gkmm.commission_value, all_orders.commission_value) - coalesce(food_cashier.gk_commission_suc + food_cashier.gf_commission_suc, fo_gkmm.commission_value_suc, all_orders.commission_value_suc) as commission_value 
+    ,coalesce(food_cashier.gk_commission + food_cashier.gf_commission, fo_gkmm.commission_value, all_orders.commission_value) - coalesce(food_cashier.gk_commission_suc + food_cashier.gf_commission_suc, fo_gkmm.commission_value_suc, all_orders.commission_value_suc) as commission_value
     ,coalesce(fo_gkmm.commission_rate, all_orders.commission_rate) as commission_rate
     ,coalesce(food_cashier.gf_commission, fo_gkmm.commission_value_grabfood, all_orders.commission_value_grabfood) - coalesce(food_cashier.gf_commission_suc, fo_gkmm.commission_value_grabfood_suc, all_orders.commission_value_grabfood_suc) as commission_value_grabfood
     ,coalesce(fo_gkmm.commission_rate_grabfood, all_orders.commission_rate_grabfood) as commission_rate_grabfood
@@ -312,6 +313,7 @@ select
     ,coalesce(fo_gkmm.commission_rate_grabfood_suc, all_orders.commission_rate_grabfood_suc) as commission_rate_grabfood_suc
     ,coalesce(food_cashier.gk_commission_suc, fo_gkmm.commission_value_grabkitchen_suc, all_orders.commission_value_grabkitchen_suc) as commission_value_grabkitchen_suc
     ,coalesce(fo_gkmm.commission_rate_grabkitchen_suc, all_orders.commission_rate_grabkitchen_suc) as commission_rate_grabkitchen_suc
+    ,coalesce(food_cashier.express_del_fee,0) as express_del_fee
 from (
     SELECT
         *
@@ -442,10 +444,27 @@ from (
         -- -- join with gkmm table (coalesce logic for columns that requires breakdown)
         -- left join fo_gkmm on fo_gkmm.order_id = fo.order_id
         --base bookings
-        left join datamart_grabfood.base_bookings bb on fo.order_id = bb.order_id
+        left join (
+            select bb.*
+            from datamart_grabfood.base_bookings bb
+            left join datamart.dim_merchants mex on bb.merchant_id = mex.merchant_id
+            where
+                --SG & MY
+                --and fo.country_id in (1,3,4)
+                -- and bb.vertical = 'GrabFood' /*maybe check the difference between vertical and taxi-type */
+                [[bb.country_id in ({{country|noquote}})]]
+                and [[bb.city_id in ({{cities|noquote}})]]
+                and [[bb.merchant_id in ({{merchant}})]]
+                and [[mex.chain_number in ({{chain_number}})]]
+                and [[date(bb.date_local) >= date({{order_create_start_date}}) - interval {{so_range}} day]]
+                and [[date(bb.date_local) <= date({{order_create_end_date}}) + interval {{so_range}} day]]
+                and [[bb.order_id in ({{ order_ids }})]]
+                and [[date(bb.ended_at_local) >= date({{order_delivered_start_date}})]]
+                and [[date(bb.ended_at_local) <= date({{order_delivered_end_date}})]]
+        )bb on fo.order_id = bb.order_id
         left join mex_funded_fo on fo.order_id = mex_funded_fo.order_id
         -- GP txn details
-        left join gp_tx 
+        left join gp_tx
             on coalesce(fo.last_booking_code, fo.order_id) = gp_tx.booking_code
             and fo.merchant_id = gp_tx.merchant_id
         --Auto accept details
@@ -481,19 +500,8 @@ from (
         left join paysi.bank bank on det.bank_id = bank.id
         left join public.cities on fo.city_id = cities.id
         left join slide.food_pax_cancel_reason_mapping map on fo.cancel_code = map.cancel_code
-        WHERE
-            --integrated orders
-            order_type = 1
-            --SG & MY
-            --and fo.country_id in (1,3,4)
-            and bb.vertical = 'GrabFood'
-            and [[bb.country_id in ({{country|noquote}})]]
-            and [[bb.city_id in ({{cities|noquote}})]]
-            and [[bb.merchant_id in ({{merchant}})]]
+        where order_type = 1
             and [[mex.chain_number in ({{chain_number}})]]
-            and [[date(bb.date_local) >= date({{order_create_start_date}})]]
-            and [[date(bb.date_local) <= date({{order_create_end_date}})]]
-            and [[bb.order_id in ({{ order_ids }})]]
     )
     {{#if auto_accept_order == 'yes'}}
     where
@@ -505,10 +513,10 @@ from (
     {{#endif}}
 ) all_orders
 left join fo_gkmm on fo_gkmm.order_id = all_orders.order_id
-left join food_cashier 
+left join food_cashier
     on all_orders.order_id = food_cashier.order_id
-    and food_cashier.merchant_id = all_orders.merchant_id 
-{{#if final_state == 'exclude_completed_orders'}} --temp fix 
+    and food_cashier.merchant_id = coalesce(fo_gkmm.gkmm_sub_merchant_id,all_orders.merchant_id)
+{{#if final_state == 'exclude_completed_orders'}} --temp fix
 where (lower(final_state) <> 'completed')
 {{#endif}}
 {{#endif}}

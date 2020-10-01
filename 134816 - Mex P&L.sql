@@ -85,7 +85,7 @@ with agg as (
 
         -- ,avg(fx_one_usd) as avg_fx_one_usd
         ,avg(rer.exchange_one_usd) as exchange_one_usd
-    from slide.gf_mex_bd_base_v2 base
+    from slide.gf_mex_bd_base base
     left join datamart.dim_merchants mex on base.merchant_id = mex.merchant_id
     left join public.cities on cities.name = base.city_name
     left join public.countries on countries.name = base.country_name

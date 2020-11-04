@@ -5,7 +5,11 @@ with cashout_success as (
     from grabpay_settlement.settle_cashout_relation
     where
         cashout_status = 'CASHOUT_SUCCESS'
-        and [[upper(partner_id) in ({{partner_id}})]]
+        {{#if include_only_grabfood == 'true'}}
+        and upper(partner_id) = 'GRABFOOD'
+        {{#else}}
+        and upper(partner_id) in ('GRABFOOD','MULTIBUSINESSLINE') /*MultiBusinessLine is for GrabLending AP*/
+        {{#endif}}
         and [[currency in ({{currency}})]]
         and [[date(date_add('hour',8,created)) between date({{start_date}}) and date({{end_date}})]] --convert to local time
         and [[date(date_add('hour',8,updated)) between date({{updated_start_date}}) and date({{updated_end_date}})]] --convert to local time
@@ -56,8 +60,11 @@ with cashout_success as (
         inner join filtered_out_mex on tx.merchantid = cast(filtered_out_mex.grab_pay_id as varchar)
     {{#endif}}
     WHERE [[date(tx.year||'-'||tx.month||'-'||tx.day) between date({{start_date}}) - interval '2' day and date({{end_date}}) + interval '2' day  ]]
-        and [[upper(Partnerid) in ({{partner_id}})]]
-        --and currency IN ('SGD','MYR')
+        {{#if include_only_grabfood == 'true'}}
+        and upper(Partnerid) in ('GRABFOOD')
+        {{#else}}
+        and upper(Partnerid) in ('GRABFOOD','GRABLENDING') /*GrabLending is for GrabLending AP*/
+        {{#endif}}
         and [[tx.currency in ({{currency}})]]
         and txtype in (59,60) -- 59 is for gkmm orders
         and [[date(created) between date({{start_date}}) - interval '2' day and date({{end_date}}) + interval '2' day ]]
@@ -122,7 +129,7 @@ from ((
         ,mlm_banks.bank_name as xm_bank_name
         ,mlm_stores.grab_id
         ,tx.partnerid
-        ,case when mpa_amount <> 0 then 'MPA Involved' else NULL end as mpa_indicator
+        ,case when mpa_amount <> 0 or upper(tx.Partnerid) <> 'GRABFOOD' then 'MPA Involved' else NULL end as mpa_indicator
         from fo
         right join merchant_transactions tx on tx.orderid = fo.booking_code_order_id
         left join grabpay_settlement.settlement_meta sm on sm.merchantid = tx.merchantid  and tx.settlementid = sm.settlementid and sm.status = 'SETTLE_INITIATED'
@@ -142,7 +149,7 @@ union all
         ,tx.partnertxid as partnertxid
         ,tx.merchantid
         ,mlm_stores.trading_name as merchant_name
-        --     ,null as Transactioncount
+        -- ,null as Transactioncount
         ,tx.net_amount as credit_amount
         -- ,tx.refundamount as debit_amount --to check
         ,tx.currency
@@ -164,7 +171,7 @@ union all
         ,mlm_banks.bank_name as xm_bank_name
         ,mlm_stores.grab_id
         ,tx.partnerid
-        ,case when mpa_amount <> 0 then 'MPA Involved' else NULL end as mpa_indicator
+        ,case when mpa_amount <> 0 or upper(tx.Partnerid) <> 'GRABFOOD' then 'MPA Involved' else NULL end as mpa_indicator
         from fo
         right join merchant_transactions tx on tx.orderid = fo.order_id
         left join grabpay_settlement.settlement_meta sm on sm.merchantid = tx.merchantid  and tx.settlementid = sm.settlementid and sm.status = 'SETTLE_INITIATED'
@@ -216,53 +223,20 @@ union all
         {{#endif}}
         left join (select * from public.countries where id<= 6) countries on sm.currency = countries.currency_symbol
         where sm.status='SETTLED'
-        and [[upper(sm.partnerid) in ({{partner_id}})]]
-                and [[currency in ({{currency}})]]
-                and [[date(created) between date({{start_date}}) - interval '2' day and date({{end_date}}) + interval '2' day ]]
-                and [[date(updated) between date({{updated_start_date}}) - interval '2' day and date({{updated_end_date}}) + interval '2' day]]
-                --and ([[dim_merchants.merchant_id in ({{zeus_merchant_info}})]] or [[dim_merchants.merchant_name in ({{zeus_merchant_info}})]] or [[dim_merchants.business_name in ({{zeus_merchant_info}})]])--filter for zeus mex_id
+            {{#if include_only_grabfood == 'true'}}
+            and upper(sm.partnerid) = 'GRABFOOD'
+            {{#else}}
+            and upper(sm.partnerid) in ('GRABFOOD','MULTIBUSINESSLINE') /*MultiBusinessLine is for GrabLending AP*/
+            {{#endif}}
+            and [[currency in ({{currency}})]]
+            and [[date(created) between date({{start_date}}) - interval '2' day and date({{end_date}}) + interval '2' day ]]
+            and [[date(updated) between date({{updated_start_date}}) - interval '2' day and date({{updated_end_date}}) + interval '2' day]]
+            --and ([[dim_merchants.merchant_id in ({{zeus_merchant_info}})]] or [[dim_merchants.merchant_name in ({{zeus_merchant_info}})]] or [[dim_merchants.business_name in ({{zeus_merchant_info}})]])--filter for zeus mex_id
 )
-/*union all (
---individual txn breakdown for grablending, commented out because this should have been captured in mpa = 0 section
-        select
-                tx.id
-                ,tx.settlementid  as internal_settlement_id
-                ,sm.manualcashoutrefid  as external_settlement_id
-                ,tx.partnertxid as partnertxid
-                ,tx.merchantid
-                ,mlm_stores.trading_name as merchant_name
-                --     ,null as Transactioncount
-                ,tx.net_amount as credit_amount
-                -- ,tx.refundamount as debit_amount --to check
-                ,tx.currency
-                ,case when cashout_success.amount = sm.amount then 'CASHOUT_SUCCESS' else tx.status end as tx_status
-                ,'order details' as record_type
-                ,date_add('hour', 8,tx.updated) as updated
-                ,date_add('hour', 8,tx.created) as created
-                ,tx.orderid as booking_code
-                ,date_add('hour', 8,tx.transactioncreatedat) as updated
-                ,date_add('hour', 8,tx.transactionupdatedat) as created
-                ,null as zeus_order_id
-                ,null as short_order_number
-                ,null as order_create_date_local
-                ,null as merchant_zeus_name_order
-                ,null as merchant_zeus_id_order
-                ,mlm_bank_details.bank_statement_code
-                ,'`'||mlm_bank_details.account_number as xm_bank_acc_number
-                ,mlm_bank_details.swift_code as xm_bank_swift_code
-                ,mlm_banks.bank_name as xm_bank_name
-                ,mlm_stores.grab_id
-                ,tx.partnerid
-                ,case when mpa_amount <> 0 then 'MPA Involved' else NULL end as mpa_indicator
-        from merchant_transactions tx
-        left join grabpay_settlement.settlement_meta sm on sm.merchantid = tx.merchantid  and tx.settlementid = sm.settlementid and sm.status = 'SETTLE_INITIATED'
-        inner join cashout_success on cashout_success.user_cashout_ref_id = sm.manualcashoutrefid
-        left join xtramile.mlm_stores on cast(tx.merchantid as varchar) = cast(mlm_stores.grab_pay_id as varchar)
-        left join xtramile.mlm_bank_details on mlm_bank_details.store_grab_id = mlm_stores.grab_id
-        left join xtramile.mlm_banks on mlm_banks.id = mlm_bank_details.bank_name_id
-        where upper(tx.partner_id) = 'GRABLENDING'
-)*/
 )
 where external_settlement_id <> '' --new logic
         and [[tx_status in ({{cashout_status}})]]
         and [[external_settlement_id in ({{external_settlement_id}})]]
+        {{#if include_only_grabfood == 'true'}}
+        and upper(partnerid) = 'GRABFOOD'
+        {{#endif}}
